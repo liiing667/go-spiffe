@@ -17,13 +17,19 @@ func TLSClientConfig(bundle x509bundle.Source, authorizer Authorizer, opts ...Op
 }
 
 // HookTLSClientConfig sets up the TLS configuration to verify and authorize
-// the server X509-SVID. If there is an existing callback set for
-// VerifyPeerCertificate it will be wrapped by this package and invoked
-// after SPIFFE authentication has completed.
+// the server X509-SVID.
+//
+// SPIFFE authentication is performed via VerifyConnection, which runs on
+// every handshake (including resumed sessions). If VerifyPeerCertificate or
+// VerifyConnection is already set on the config, those callbacks are
+// preserved and invoked after SPIFFE authentication succeeds: first
+// VerifyPeerCertificate, then VerifyConnection.
 func HookTLSClientConfig(config *tls.Config, bundle x509bundle.Source, authorizer Authorizer, opts ...Option) {
+	prevVerifyPeerCertificate := config.VerifyPeerCertificate
+	prevVerifyConnection := config.VerifyConnection
 	resetAuthFields(config)
-	config.InsecureSkipVerify = true
-	config.VerifyPeerCertificate = WrapVerifyPeerCertificate(config.VerifyPeerCertificate, bundle, authorizer, opts...) //nolint:gosec // G123: VerifyConnection migration handled in a follow-up
+	config.InsecureSkipVerify = true //nolint:gosec // G123: hostname verification is replaced by SPIFFE authentication in VerifyConnection
+	config.VerifyConnection = wrapVerifyConnection(prevVerifyPeerCertificate, prevVerifyConnection, bundle, authorizer)
 }
 
 // A Option changes the defaults used to by mTLS ClientConfig functions.
@@ -64,14 +70,20 @@ func MTLSClientConfig(svid x509svid.Source, bundle x509bundle.Source, authorizer
 }
 
 // HookMTLSClientConfig sets up the TLS configuration to present an X509-SVID
-// to the server and verify and authorize the server X509-SVID. If there is an
-// existing callback set for VerifyPeerCertificate it will be wrapped by
-// this package and invoked after SPIFFE authentication has completed.
+// to the server and verify and authorize the server X509-SVID.
+//
+// SPIFFE authentication is performed via VerifyConnection, which runs on
+// every handshake (including resumed sessions). If VerifyPeerCertificate or
+// VerifyConnection is already set on the config, those callbacks are
+// preserved and invoked after SPIFFE authentication succeeds: first
+// VerifyPeerCertificate, then VerifyConnection.
 func HookMTLSClientConfig(config *tls.Config, svid x509svid.Source, bundle x509bundle.Source, authorizer Authorizer, opts ...Option) {
+	prevVerifyPeerCertificate := config.VerifyPeerCertificate
+	prevVerifyConnection := config.VerifyConnection
 	resetAuthFields(config)
 	config.GetClientCertificate = GetClientCertificate(svid, opts...)
-	config.InsecureSkipVerify = true
-	config.VerifyPeerCertificate = WrapVerifyPeerCertificate(config.VerifyPeerCertificate, bundle, authorizer, opts...) //nolint:gosec // G123: VerifyConnection migration handled in a follow-up
+	config.InsecureSkipVerify = true //nolint:gosec // G123: hostname verification is replaced by SPIFFE authentication in VerifyConnection
+	config.VerifyConnection = wrapVerifyConnection(prevVerifyPeerCertificate, prevVerifyConnection, bundle, authorizer)
 }
 
 // MTLSWebClientConfig returns a TLS configuration which presents an X509-SVID
@@ -117,14 +129,18 @@ func MTLSServerConfig(svid x509svid.Source, bundle x509bundle.Source, authorizer
 
 // HookMTLSServerConfig sets up the TLS configuration to present an X509-SVID
 // to the client and require, verify, and authorize the client X509-SVID. If
-// there is an existing callback set for VerifyPeerCertificate it will be
-// wrapped by this package and invoked after SPIFFE authentication has
-// completed.
+// there is an existing VerifyPeerCertificate or VerifyConnection callback set
+// on the config, those callbacks are preserved and invoked after SPIFFE
+// authentication succeeds: first VerifyPeerCertificate, then
+// VerifyConnection. SPIFFE authentication itself runs in VerifyConnection on
+// every handshake (including resumed sessions).
 func HookMTLSServerConfig(config *tls.Config, svid x509svid.Source, bundle x509bundle.Source, authorizer Authorizer, opts ...Option) {
+	prevVerifyPeerCertificate := config.VerifyPeerCertificate
+	prevVerifyConnection := config.VerifyConnection
 	resetAuthFields(config)
 	config.ClientAuth = tls.RequireAnyClientCert
 	config.GetCertificate = GetCertificate(svid, opts...)
-	config.VerifyPeerCertificate = WrapVerifyPeerCertificate(config.VerifyPeerCertificate, bundle, authorizer, opts...) //nolint:gosec // G123: VerifyConnection migration handled in a follow-up
+	config.VerifyConnection = wrapVerifyConnection(prevVerifyPeerCertificate, prevVerifyConnection, bundle, authorizer)
 }
 
 // MTLSWebServerConfig returns a TLS configuration which presents a web
@@ -138,14 +154,18 @@ func MTLSWebServerConfig(cert *tls.Certificate, bundle x509bundle.Source, author
 
 // HookMTLSWebServerConfig sets up the TLS configuration to presents a web
 // server certificate to the client and require, verify, and authorize client
-// X509-SVIDs. If there is an existing callback set for VerifyPeerCertificate
-// it will be wrapped by this package and invoked after SPIFFE
-// authentication has completed.
+// X509-SVIDs. If there is an existing VerifyPeerCertificate or
+// VerifyConnection callback set on the config, those callbacks are preserved
+// and invoked after SPIFFE authentication succeeds: first
+// VerifyPeerCertificate, then VerifyConnection. SPIFFE authentication itself
+// runs in VerifyConnection on every handshake (including resumed sessions).
 func HookMTLSWebServerConfig(config *tls.Config, cert *tls.Certificate, bundle x509bundle.Source, authorizer Authorizer, opts ...Option) {
+	prevVerifyPeerCertificate := config.VerifyPeerCertificate
+	prevVerifyConnection := config.VerifyConnection
 	resetAuthFields(config)
 	config.ClientAuth = tls.RequireAnyClientCert
 	config.Certificates = []tls.Certificate{*cert}
-	config.VerifyPeerCertificate = WrapVerifyPeerCertificate(config.VerifyPeerCertificate, bundle, authorizer, opts...) //nolint:gosec // G123: VerifyConnection migration handled in a follow-up
+	config.VerifyConnection = wrapVerifyConnection(prevVerifyPeerCertificate, prevVerifyConnection, bundle, authorizer)
 }
 
 // GetCertificate returns a GetCertificate callback for tls.Config. It uses the
@@ -204,6 +224,50 @@ func WrapVerifyPeerCertificate(wrapped func([][]byte, [][]*x509.Certificate) err
 	}
 }
 
+// wrapVerifyConnection returns a VerifyConnection callback that performs
+// SPIFFE authentication against the peer certificates using the given bundle
+// and authorizer. Any VerifyPeerCertificate and VerifyConnection callbacks
+// previously set on the config are preserved and invoked after SPIFFE
+// authentication succeeds, first VerifyPeerCertificate and then
+// VerifyConnection.
+func wrapVerifyConnection(
+	prevVerifyPeerCertificate func([][]byte, [][]*x509.Certificate) error,
+	prevVerifyConnection func(tls.ConnectionState) error,
+	bundle x509bundle.Source,
+	authorizer Authorizer,
+) func(tls.ConnectionState) error {
+	return func(connectionState tls.ConnectionState) error {
+		rawCerts := rawPeerCertificates(connectionState.PeerCertificates)
+		id, certs, err := x509svid.ParseAndVerify(rawCerts, bundle)
+		if err != nil {
+			return err
+		}
+
+		if err := authorizer(id, certs); err != nil {
+			return err
+		}
+
+		if prevVerifyPeerCertificate != nil {
+			if err := prevVerifyPeerCertificate(rawCerts, certs); err != nil {
+				return err
+			}
+		}
+
+		if prevVerifyConnection != nil {
+			return prevVerifyConnection(connectionState)
+		}
+		return nil
+	}
+}
+
+func rawPeerCertificates(certs []*x509.Certificate) [][]byte {
+	raw := make([][]byte, 0, len(certs))
+	for _, cert := range certs {
+		raw = append(raw, cert.Raw)
+	}
+	return raw
+}
+
 func getTLSCertificate(svid x509svid.Source, trace Trace) (*tls.Certificate, error) {
 	var traceVal any
 	if trace.GetCertificate != nil {
@@ -252,4 +316,6 @@ func resetAuthFields(config *tls.Config) {
 	config.InsecureSkipVerify = false
 	config.NameToCertificate = nil //nolint:staticcheck // setting to nil is OK
 	config.RootCAs = nil
+	config.VerifyPeerCertificate = nil
+	config.VerifyConnection = nil
 }

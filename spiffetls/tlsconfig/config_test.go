@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -43,7 +44,8 @@ func TestTLSClientConfig(t *testing.T) {
 	assert.True(t, config.InsecureSkipVerify)
 	assert.Nil(t, config.NameToCertificate) //nolint:staticcheck // setting to nil is OK
 	assert.Nil(t, config.RootCAs)
-	assert.NotNil(t, config.VerifyPeerCertificate)
+	assert.Nil(t, config.VerifyPeerCertificate)
+	assert.NotNil(t, config.VerifyConnection)
 }
 
 func TestHookTLSClientConfig(t *testing.T) {
@@ -61,7 +63,8 @@ func TestHookTLSClientConfig(t *testing.T) {
 	assert.True(t, config.InsecureSkipVerify)
 	assert.Nil(t, config.NameToCertificate) //nolint:staticcheck // setting to nil is OK
 	assert.Nil(t, config.RootCAs)
-	assert.NotNil(t, config.VerifyPeerCertificate)
+	assert.Nil(t, config.VerifyPeerCertificate)
+	assert.NotNil(t, config.VerifyConnection)
 	assertUnrelatedFieldsUntouched(t, base, config)
 }
 
@@ -81,7 +84,8 @@ func TestMTLSClientConfig(t *testing.T) {
 	assert.True(t, config.InsecureSkipVerify)
 	assert.Nil(t, config.NameToCertificate) //nolint:staticcheck // setting to nil is OK
 	assert.Nil(t, config.RootCAs)
-	assert.NotNil(t, config.VerifyPeerCertificate)
+	assert.Nil(t, config.VerifyPeerCertificate)
+	assert.NotNil(t, config.VerifyConnection)
 }
 
 func TestHookMTLSClientConfig(t *testing.T) {
@@ -102,7 +106,8 @@ func TestHookMTLSClientConfig(t *testing.T) {
 	assert.True(t, config.InsecureSkipVerify)
 	assert.Nil(t, config.NameToCertificate) //nolint:staticcheck // setting to nil is OK
 	assert.Nil(t, config.RootCAs)
-	assert.NotNil(t, config.VerifyPeerCertificate)
+	assert.Nil(t, config.VerifyPeerCertificate)
+	assert.NotNil(t, config.VerifyConnection)
 	assertUnrelatedFieldsUntouched(t, base, config)
 }
 
@@ -122,6 +127,7 @@ func TestMTLSWebClientConfig(t *testing.T) {
 	assert.Nil(t, config.NameToCertificate) //nolint:staticcheck // setting to nil is OK
 	assert.Equal(t, roots, config.RootCAs)
 	assert.Nil(t, config.VerifyPeerCertificate)
+	assert.Nil(t, config.VerifyConnection)
 }
 
 func TestHookMTLSWebClientConfig(t *testing.T) {
@@ -143,6 +149,7 @@ func TestHookMTLSWebClientConfig(t *testing.T) {
 	assert.Nil(t, config.NameToCertificate) //nolint:staticcheck // setting to nil is OK
 	assert.Equal(t, roots, config.RootCAs)
 	assert.Nil(t, config.VerifyPeerCertificate)
+	assert.Nil(t, config.VerifyConnection)
 	assertUnrelatedFieldsUntouched(t, base, config)
 }
 
@@ -161,6 +168,7 @@ func TestTLSServerConfig(t *testing.T) {
 	assert.Nil(t, config.NameToCertificate) //nolint:staticcheck // setting to nil is OK
 	assert.Nil(t, config.RootCAs)
 	assert.Nil(t, config.VerifyPeerCertificate)
+	assert.Nil(t, config.VerifyConnection)
 }
 
 func TestHookTLSServerConfig(t *testing.T) {
@@ -180,6 +188,7 @@ func TestHookTLSServerConfig(t *testing.T) {
 	assert.Nil(t, config.NameToCertificate) //nolint:staticcheck // setting to nil is OK
 	assert.Nil(t, config.RootCAs)
 	assert.Nil(t, config.VerifyPeerCertificate)
+	assert.Nil(t, config.VerifyConnection)
 	assertUnrelatedFieldsUntouched(t, base, config)
 }
 
@@ -199,7 +208,8 @@ func TestMTLSServerConfig(t *testing.T) {
 	assert.False(t, config.InsecureSkipVerify)
 	assert.Nil(t, config.NameToCertificate) //nolint:staticcheck // setting to nil is OK
 	assert.Nil(t, config.RootCAs)
-	assert.NotNil(t, config.VerifyPeerCertificate)
+	assert.Nil(t, config.VerifyPeerCertificate)
+	assert.NotNil(t, config.VerifyConnection)
 }
 
 func TestHookMTLSServerConfig(t *testing.T) {
@@ -220,7 +230,8 @@ func TestHookMTLSServerConfig(t *testing.T) {
 	assert.False(t, config.InsecureSkipVerify)
 	assert.Nil(t, config.NameToCertificate) //nolint:staticcheck // setting to nil is OK
 	assert.Nil(t, config.RootCAs)
-	assert.NotNil(t, config.VerifyPeerCertificate)
+	assert.Nil(t, config.VerifyPeerCertificate)
+	assert.NotNil(t, config.VerifyConnection)
 	assertUnrelatedFieldsUntouched(t, base, config)
 }
 
@@ -238,7 +249,8 @@ func TestMTLSWebServerConfig(t *testing.T) {
 	assert.False(t, config.InsecureSkipVerify)
 	assert.Nil(t, config.NameToCertificate) //nolint:staticcheck // setting to nil is OK
 	assert.Nil(t, config.RootCAs)
-	assert.NotNil(t, config.VerifyPeerCertificate)
+	assert.Nil(t, config.VerifyPeerCertificate)
+	assert.NotNil(t, config.VerifyConnection)
 }
 
 func TestHookMTLSWebServerConfig(t *testing.T) {
@@ -257,7 +269,8 @@ func TestHookMTLSWebServerConfig(t *testing.T) {
 	assert.False(t, config.InsecureSkipVerify)
 	assert.Nil(t, config.NameToCertificate) //nolint:staticcheck // setting to nil is OK
 	assert.Nil(t, config.RootCAs)
-	assert.NotNil(t, config.VerifyPeerCertificate)
+	assert.Nil(t, config.VerifyPeerCertificate)
+	assert.NotNil(t, config.VerifyConnection)
 	assertUnrelatedFieldsUntouched(t, base, config)
 }
 
@@ -510,6 +523,153 @@ func TestWrapVerifyPeerCertificate(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+// TestHookInputCallbacksPreserved verifies that VerifyPeerCertificate and
+// VerifyConnection set on the input config are captured and invoked after
+// SPIFFE authentication succeeds for the Hook functions that install SPIFFE
+// authentication via VerifyConnection.
+func TestHookInputCallbacksPreserved(t *testing.T) {
+	td := spiffeid.RequireTrustDomainFromString("domain1.test")
+	ca := test.NewCA(t, td)
+	bundle := ca.X509Bundle()
+	svid := ca.CreateX509SVID(spiffeid.RequireFromPath(td, "/host"))
+
+	var vpcCalls, vcCalls atomic.Int32
+
+	inputVPC := func([][]byte, [][]*x509.Certificate) error { //nolint:unparam // always nil by design in this test
+		vpcCalls.Add(1)
+		return nil
+	}
+	inputVC := func(tls.ConnectionState) error { //nolint:unparam // always nil by design in this test
+		vcCalls.Add(1)
+		return nil
+	}
+
+	connectionState := tls.ConnectionState{PeerCertificates: svid.Certificates}
+
+	reset := func() *tls.Config {
+		vpcCalls.Store(0)
+		vcCalls.Store(0)
+		return &tls.Config{
+			VerifyPeerCertificate: inputVPC,
+			VerifyConnection:      inputVC,
+		}
+	}
+
+	assertBothCalled := func(t *testing.T, config *tls.Config) {
+		t.Helper()
+		assert.Nil(t, config.VerifyPeerCertificate)
+		assert.NotNil(t, config.VerifyConnection)
+		require.NoError(t, config.VerifyConnection(connectionState))
+		assert.EqualValues(t, 1, vpcCalls.Load())
+		assert.EqualValues(t, 1, vcCalls.Load())
+	}
+
+	t.Run("HookTLSClientConfig", func(t *testing.T) {
+		config := reset()
+		tlsconfig.HookTLSClientConfig(config, bundle, tlsconfig.AuthorizeAny())
+		assertBothCalled(t, config)
+	})
+
+	t.Run("HookMTLSClientConfig", func(t *testing.T) {
+		config := reset()
+		tlsconfig.HookMTLSClientConfig(config, svid, bundle, tlsconfig.AuthorizeAny())
+		assertBothCalled(t, config)
+	})
+
+	t.Run("HookMTLSServerConfig", func(t *testing.T) {
+		config := reset()
+		tlsconfig.HookMTLSServerConfig(config, svid, bundle, tlsconfig.AuthorizeAny())
+		assertBothCalled(t, config)
+	})
+
+	t.Run("HookMTLSWebServerConfig", func(t *testing.T) {
+		config := reset()
+		tlsCert := &tls.Certificate{Certificate: [][]byte{[]byte("body")}}
+		tlsconfig.HookMTLSWebServerConfig(config, tlsCert, bundle, tlsconfig.AuthorizeAny())
+		assertBothCalled(t, config)
+	})
+
+	t.Run("only VerifyPeerCertificate set", func(t *testing.T) {
+		vpcCalls.Store(0)
+		config := &tls.Config{VerifyPeerCertificate: inputVPC} //nolint:gosec // G123: input callback preserved before the Hook installs VerifyConnection
+		tlsconfig.HookTLSClientConfig(config, bundle, tlsconfig.AuthorizeAny())
+		require.NoError(t, config.VerifyConnection(connectionState))
+		assert.EqualValues(t, 1, vpcCalls.Load())
+		assert.Nil(t, config.VerifyPeerCertificate)
+	})
+
+	t.Run("only VerifyConnection set", func(t *testing.T) {
+		vcCalls.Store(0)
+		config := &tls.Config{VerifyConnection: inputVC}
+		tlsconfig.HookTLSClientConfig(config, bundle, tlsconfig.AuthorizeAny())
+		require.NoError(t, config.VerifyConnection(connectionState))
+		assert.EqualValues(t, 1, vcCalls.Load())
+		assert.Nil(t, config.VerifyPeerCertificate)
+	})
+}
+
+// TestHookInputCallbackErrorStopsChain verifies that a preserved
+// VerifyPeerCertificate error short-circuits the chain so the preserved
+// VerifyConnection callback is not invoked.
+func TestHookInputCallbackErrorStopsChain(t *testing.T) {
+	td := spiffeid.RequireTrustDomainFromString("domain1.test")
+	ca := test.NewCA(t, td)
+	bundle := ca.X509Bundle()
+	svid := ca.CreateX509SVID(spiffeid.RequireFromPath(td, "/host"))
+
+	var vcCalls atomic.Int32
+
+	config := &tls.Config{
+		VerifyPeerCertificate: func([][]byte, [][]*x509.Certificate) error {
+			return errors.New("vpc rejected")
+		},
+		VerifyConnection: func(tls.ConnectionState) error {
+			vcCalls.Add(1)
+			return nil
+		},
+	}
+
+	tlsconfig.HookTLSClientConfig(config, bundle, tlsconfig.AuthorizeAny())
+	connectionState := tls.ConnectionState{PeerCertificates: svid.Certificates}
+	err := config.VerifyConnection(connectionState)
+	require.EqualError(t, err, "vpc rejected")
+	assert.EqualValues(t, 0, vcCalls.Load())
+}
+
+// TestRepeatedHooksCompose verifies that applying a Hook twice preserves the
+// VerifyConnection installed by the first Hook and still performs SPIFFE
+// authentication on every invocation, keeping the previous wrapping semantics.
+func TestRepeatedHooksCompose(t *testing.T) {
+	td := spiffeid.RequireTrustDomainFromString("domain1.test")
+	ca := test.NewCA(t, td)
+	bundle := ca.X509Bundle()
+	svid := ca.CreateX509SVID(spiffeid.RequireFromPath(td, "/host"))
+
+	connectionState := tls.ConnectionState{PeerCertificates: svid.Certificates}
+
+	var preservedCalls atomic.Int32
+	config := &tls.Config{
+		VerifyConnection: func(tls.ConnectionState) error {
+			preservedCalls.Add(1)
+			return nil
+		},
+	}
+	tlsconfig.HookTLSClientConfig(config, bundle, tlsconfig.AuthorizeAny())
+	tlsconfig.HookTLSClientConfig(config, bundle, tlsconfig.AuthorizeAny())
+	require.NotNil(t, config.VerifyConnection)
+	require.NoError(t, config.VerifyConnection(connectionState))
+	// The preserved callback remains reachable once through the nested chain,
+	// while SPIFFE authentication runs on every Hook layer.
+	assert.EqualValues(t, 1, preservedCalls.Load())
+
+	// The inner (first) Hook still rejects peers that fail authorization.
+	config2 := tlsconfig.TLSClientConfig(bundle, tlsconfig.AuthorizeMemberOf(
+		spiffeid.RequireTrustDomainFromString("domain2.test")))
+	tlsconfig.HookTLSClientConfig(config2, bundle, tlsconfig.AuthorizeAny())
+	err := config2.VerifyConnection(connectionState)
+	require.EqualError(t, err, `unexpected trust domain "domain1.test"`)
 }
 
 func TestTLSHandshake(t *testing.T) {
@@ -816,6 +976,7 @@ func createTestTLSConfig(base *tls.Config) *tls.Config {
 			return nil, nil
 		},
 		VerifyPeerCertificate: nil,
+		VerifyConnection:      nil,
 		RootCAs:               x509.NewCertPool(),
 		InsecureSkipVerify:    false,
 		ClientAuth:            tls.RequestClientCert,
