@@ -6,7 +6,9 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 
 	"github.com/spiffe/go-spiffe/v2/bundle/spiffebundle"
 	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
@@ -23,6 +25,21 @@ type fetchOptions struct {
 	transport  *http.Transport
 	authMethod authMethod
 }
+
+const (
+	// maxRedirects is the maximum number of redirects that FetchBundle
+	// follows. It matches the default limit used by http.Client.
+	maxRedirects = 10
+	// maxBundleBytes is the maximum size of a bundle response. Bundles are
+	// small JWKS documents, so this bounds the memory consumed when an
+	// endpoint streams an unbounded response.
+	maxBundleBytes = 10 * 1024 * 1024
+)
+
+// errCrossOriginRedirect is returned when a bundle endpoint attempts to
+// redirect the request to a different origin (scheme or host) than the
+// origin of the requested URL.
+var errCrossOriginRedirect = errors.New("redirect to a different origin is not allowed")
 
 // WithSPIFFEAuth authenticates the bundle endpoint with SPIFFE authentication
 // using the provided root store. It validates that the endpoint presents the
@@ -68,7 +85,8 @@ func FetchBundle(ctx context.Context, trustDomain spiffeid.TrustDomain, url stri
 	}
 
 	var client = &http.Client{
-		Transport: opts.transport,
+		Transport:     opts.transport,
+		CheckRedirect: checkRedirect,
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
@@ -80,12 +98,41 @@ func FetchBundle(ctx context.Context, trustDomain spiffeid.TrustDomain, url stri
 	}
 	defer response.Body.Close()
 
-	bundle, err := spiffebundle.Read(trustDomain, response.Body)
+	// Read at most maxBundleBytes plus one byte so that an oversized body can
+	// be detected even if the endpoint keeps streaming data indefinitely.
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxBundleBytes+1))
+	if err != nil {
+		return nil, wrapFederationErr(fmt.Errorf("could not read bundle: %w", err))
+	}
+	if int64(len(body)) > maxBundleBytes {
+		return nil, wrapFederationErr(fmt.Errorf("bundle exceeds maximum allowed size of %d bytes", maxBundleBytes))
+	}
+
+	bundle, err := spiffebundle.Parse(trustDomain, body)
 	if err != nil {
 		return nil, wrapFederationErr(err)
 	}
-
 	return bundle, nil
+}
+
+// checkRedirect only allows redirects that stay on the same origin as the
+// original bundle endpoint URL. Redirects to a different scheme or host are
+// rejected so that a compromised endpoint cannot steer the client into
+// fetching untrusted content from another host or over a downgraded
+// connection.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxRedirects)
+	}
+
+	original := via[0].URL
+	target := req.URL
+	if !strings.EqualFold(original.Scheme, target.Scheme) ||
+		!strings.EqualFold(original.Hostname(), target.Hostname()) ||
+		original.Port() != target.Port() {
+		return fmt.Errorf("%w: %q", errCrossOriginRedirect, target.String())
+	}
+	return nil
 }
 
 func wrapFederationErr(err error) error {

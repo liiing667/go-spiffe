@@ -2,8 +2,13 @@ package federation_test
 
 import (
 	"context"
+	"crypto/tls"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/spiffe/go-spiffe/v2/federation"
 	"github.com/spiffe/go-spiffe/v2/internal/test"
@@ -106,5 +111,156 @@ func TestFetchBundle_ErrorReadingBundleBody(t *testing.T) {
 	fetchedBundle, err := federation.FetchBundle(context.Background(), td, be.FetchBundleURL(),
 		federation.WithWebPKIRoots(be.RootCAs()))
 	assert.EqualError(t, err, `federation: spiffebundle: unable to parse JWKS: unexpected end of JSON input`)
+	assert.Nil(t, fetchedBundle)
+}
+
+func writeTestBundle(t *testing.T, w http.ResponseWriter) {
+	t.Helper()
+	ca := test.NewCA(t, td)
+	data, err := ca.Bundle().Marshal()
+	assert.NoError(t, err)
+	w.Header().Set("Content-Type", "application/json")
+	_, err = w.Write(data)
+	assert.NoError(t, err)
+}
+
+func TestFetchBundle_SameOriginRedirect(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/redirect", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/test-bundle", http.StatusFound)
+	})
+	mux.HandleFunc("/test-bundle", func(w http.ResponseWriter, r *http.Request) {
+		writeTestBundle(t, w)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	fetchedBundle, err := federation.FetchBundle(context.Background(), td, server.URL+"/redirect")
+	assert.NoError(t, err)
+	assert.NotNil(t, fetchedBundle)
+	assert.Equal(t, td, fetchedBundle.TrustDomain())
+}
+
+func TestFetchBundle_CrossOriginRedirect(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeTestBundle(t, w)
+	}))
+	defer target.Close()
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/test-bundle", http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	fetchedBundle, err := federation.FetchBundle(context.Background(), td, redirector.URL+"/redirect")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "federation: could not GET bundle:")
+	assert.Contains(t, err.Error(), "redirect to a different origin is not allowed")
+	assert.Nil(t, fetchedBundle)
+}
+
+func TestFetchBundle_SchemeDowngradeRedirect(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeTestBundle(t, w)
+	}))
+	defer target.Close()
+
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, strings.Replace(target.URL, "127.0.0.1", "localhost", 1)+"/test-bundle", http.StatusFound)
+	}))
+	defer secure.Close()
+
+	fetchedBundle, err := federation.FetchBundle(context.Background(), td, secure.URL+"/redirect",
+		federation.WithWebPKIRoots(secure.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "redirect to a different origin is not allowed")
+	assert.Nil(t, fetchedBundle)
+}
+
+func TestFetchBundle_TLSSameOriginRedirect_WebPKI(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/redirect", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/test-bundle", http.StatusFound)
+	})
+	mux.HandleFunc("/test-bundle", func(w http.ResponseWriter, r *http.Request) {
+		writeTestBundle(t, w)
+	})
+	server := httptest.NewTLSServer(mux)
+	defer server.Close()
+
+	fetchedBundle, err := federation.FetchBundle(context.Background(), td, server.URL+"/redirect",
+		federation.WithWebPKIRoots(server.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs))
+	assert.NoError(t, err)
+	assert.NotNil(t, fetchedBundle)
+	assert.Equal(t, td, fetchedBundle.TrustDomain())
+}
+
+func TestFetchBundle_TLSSameOriginRedirect_SPIFFEAuth(t *testing.T) {
+	id := spiffeid.RequireFromPath(td, "/control-plane/test-bundle-endpoint")
+	ca := test.NewCA(t, td)
+	svid := ca.CreateX509SVID(id, test.WithIPAddresses(localhostIPs...))
+	bundle := ca.Bundle()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/redirect", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/test-bundle", http.StatusFound)
+	})
+	mux.HandleFunc("/test-bundle", func(w http.ResponseWriter, r *http.Request) {
+		data, err := bundle.Marshal()
+		assert.NoError(t, err)
+		w.Header().Set("Content-Type", "application/json")
+		_, err = w.Write(data)
+		assert.NoError(t, err)
+	})
+	server := httptest.NewUnstartedServer(mux)
+	server.TLS = &tls.Config{
+		Certificates: []tls.Certificate{{
+			Certificate: [][]byte{svid.Certificates[0].Raw},
+			PrivateKey:  svid.PrivateKey,
+		}},
+		MinVersion: tls.VersionTLS12,
+	}
+	server.StartTLS()
+	defer server.Close()
+
+	fetchedBundle, err := federation.FetchBundle(context.Background(), td, server.URL+"/redirect",
+		federation.WithSPIFFEAuth(bundle, id))
+	assert.NoError(t, err)
+	assert.Equal(t, bundle, fetchedBundle)
+}
+
+func TestFetchBundle_OversizedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(make([]byte, 11*1024*1024))
+	}))
+	defer server.Close()
+
+	fetchedBundle, err := federation.FetchBundle(context.Background(), td, server.URL+"/bundle")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "federation: bundle exceeds maximum allowed size of")
+	assert.Nil(t, fetchedBundle)
+}
+
+func TestFetchBundle_UnboundedStreamResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("ResponseWriter does not implement http.Flusher")
+		}
+		for {
+			if _, err := w.Write([]byte("not-a-bundle")); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	fetchedBundle, err := federation.FetchBundle(ctx, td, server.URL+"/bundle")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "federation: bundle exceeds maximum allowed size of")
 	assert.Nil(t, fetchedBundle)
 }
