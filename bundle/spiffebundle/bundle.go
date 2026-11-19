@@ -411,6 +411,36 @@ func (b *Bundle) ClearSequenceNumber() {
 	b.sequenceNumber = nil
 }
 
+// CheckSequenceNumber determines whether other may supersede b based on the
+// SPIFFE bundle sequence number (spiffe_sequence). A bundle that carries a
+// sequence number lower than the current one is a replay of an older
+// generation and must not be accepted, since accepting it could restore trust
+// material (for example an X.509 authority) that was deliberately removed.
+//
+// The check returns true when other is allowed to replace b:
+//   - If either bundle lacks a sequence number, sequence-based ordering is not
+//     possible, so the caller falls back to comparing the bundle contents.
+//   - If both carry a sequence number, other must have a strictly greater
+//     sequence number. An equal sequence number with different contents is a
+//     conflicting generation and is also rejected.
+func (b *Bundle) CheckSequenceNumber(other *Bundle) bool {
+	b.mtx.RLock()
+	defer b.mtx.RUnlock()
+
+	if other == nil || b.sequenceNumber == nil {
+		return true
+	}
+
+	other.mtx.RLock()
+	defer other.mtx.RUnlock()
+
+	if other.sequenceNumber == nil {
+		return true
+	}
+
+	return *other.sequenceNumber > *b.sequenceNumber
+}
+
 // Marshal marshals the bundle according to the SPIFFE Trust Domain and Bundle
 // specification. The trust domain is not marshaled as part of the bundle and
 // must be conveyed separately. See the specification for details.

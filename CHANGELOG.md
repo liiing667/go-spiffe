@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `federation.WatchBundle` now rejects a fetched SPIFFE bundle whose `spiffe_sequence` is not greater than the current bundle's sequence number, preventing a replayed older generation from replacing the current trust set and restoring revoked trust material. Bundles without a sequence number continue to use content-based comparison (#28227)
+
 ## [2.9.0] - 2026-10-05
 
 ### Added

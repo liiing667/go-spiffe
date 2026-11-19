@@ -3,6 +3,7 @@ package federation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/spiffe/go-spiffe/v2/bundle/spiffebundle"
@@ -52,6 +53,17 @@ func WatchBundle(ctx context.Context, trustDomain spiffeid.TrustDomain, url stri
 			return ctx.Err()
 		case err != nil:
 			watcher.OnError(err)
+		case !latestBundle.CheckSequenceNumber(bundle):
+			// The fetched bundle carries a sequence number that is not
+			// greater than the current one. It is a replay of an older
+			// generation, or a conflicting bundle reusing the same
+			// sequence number. Reject it and keep the current trust set so
+			// a stale bundle cannot restore revoked trust material.
+			currentSequence, _ := latestBundle.SequenceNumber()
+			fetchedSequence, _ := bundle.SequenceNumber()
+			watcher.OnError(wrapFederationErr(fmt.Errorf(
+				"rejected bundle with sequence number %d that does not exceed the current sequence number %d",
+				fetchedSequence, currentSequence)))
 		case !latestBundle.Equal(bundle):
 			watcher.OnUpdate(bundle)
 			latestBundle = bundle

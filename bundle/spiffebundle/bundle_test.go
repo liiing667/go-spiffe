@@ -273,6 +273,62 @@ func TestSequenceNumber(t *testing.T) {
 	assert.Equal(t, uint64(0), sn)
 }
 
+func TestCheckSequenceNumber(t *testing.T) {
+	bundleWithoutSequence := spiffebundle.New(td)
+	bundleSequence1 := spiffebundle.New(td)
+	bundleSequence1.SetSequenceNumber(1)
+	bundleSequence2 := spiffebundle.New(td)
+	bundleSequence2.SetSequenceNumber(2)
+
+	for _, tt := range []struct {
+		name    string
+		current *spiffebundle.Bundle
+		other   *spiffebundle.Bundle
+		expect  bool
+	}{
+		{
+			name:    "first bundle without a sequence number is accepted",
+			current: spiffebundle.New(td),
+			other:   bundleWithoutSequence,
+			expect:  true,
+		},
+		{
+			name:    "bundle without a sequence number stays compatible",
+			current: bundleSequence1,
+			other:   bundleWithoutSequence,
+			expect:  true,
+		},
+		{
+			name:    "bundle adding a sequence number is accepted",
+			current: bundleWithoutSequence,
+			other:   bundleSequence1,
+			expect:  true,
+		},
+		{
+			name:    "incrementing sequence number is accepted",
+			current: bundleSequence1,
+			other:   bundleSequence2,
+			expect:  true,
+		},
+		{
+			name:    "equal sequence number is rejected",
+			current: bundleSequence1,
+			other:   bundleSequence1,
+			expect:  false,
+		},
+		{
+			name:    "lower sequence number replay is rejected",
+			current: bundleSequence2,
+			other:   bundleSequence1,
+			expect:  false,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expect, tt.current.CheckSequenceNumber(tt.other))
+		})
+	}
+}
+
 func TestMarshal(t *testing.T) {
 	// Load a bundle to marshal
 	bundle, err := spiffebundle.Load(td, "testdata/spiffebundle_valid_2.json")
