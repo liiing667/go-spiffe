@@ -3,6 +3,8 @@ package federation_test
 import (
 	"context"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/spiffe/go-spiffe/v2/federation"
@@ -10,6 +12,7 @@ import (
 	"github.com/spiffe/go-spiffe/v2/internal/test/fakebundleendpoint"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -107,4 +110,85 @@ func TestFetchBundle_ErrorReadingBundleBody(t *testing.T) {
 		federation.WithWebPKIRoots(be.RootCAs()))
 	assert.EqualError(t, err, `federation: spiffebundle: unable to parse JWKS: unexpected end of JSON input`)
 	assert.Nil(t, fetchedBundle)
+}
+
+func TestFetchBundle_RejectsInvalidKeyUse(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		doc         string
+		expectedErr string
+	}{
+		{
+			name: "missing use",
+			doc: `{
+				"keys": [
+					{
+						"kty": "EC",
+						"kid": "KID",
+						"crv": "P-256",
+						"x": "fK-wKTnKL7KFLM27lqq5DC-bxrVaH6rDV-IcCSEOeL4",
+						"y": "wq-g3TQWxYlV51TCPH030yXsRxvujD4hUUaIQrXk4KI"
+					}
+				]
+			}`,
+			expectedErr: "federation: spiffebundle: missing use in key entry 0 of JWKS",
+		},
+		{
+			name: "unknown use",
+			doc: `{
+				"keys": [
+					{
+						"use": "mystery-svid",
+						"kty": "EC",
+						"kid": "KID",
+						"crv": "P-256",
+						"x": "fK-wKTnKL7KFLM27lqq5DC-bxrVaH6rDV-IcCSEOeL4",
+						"y": "wq-g3TQWxYlV51TCPH030yXsRxvujD4hUUaIQrXk4KI"
+					}
+				]
+			}`,
+			expectedErr: `federation: spiffebundle: unexpected use "mystery-svid" in key entry 0 of JWKS`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, err := w.Write([]byte(tc.doc))
+				require.NoError(t, err)
+			}))
+			defer server.Close()
+
+			fetchedBundle, err := federation.FetchBundle(context.Background(), td, server.URL)
+			assert.EqualError(t, err, tc.expectedErr)
+			assert.Nil(t, fetchedBundle)
+		})
+	}
+}
+
+func TestFetchBundle_AcceptsSingleTypeBundle(t *testing.T) {
+	doc := `{
+		"keys": [
+			{
+				"use": "jwt-svid",
+				"kty": "EC",
+				"kid": "KID",
+				"crv": "P-256",
+				"x": "fK-wKTnKL7KFLM27lqq5DC-bxrVaH6rDV-IcCSEOeL4",
+				"y": "wq-g3TQWxYlV51TCPH030yXsRxvujD4hUUaIQrXk4KI"
+			}
+		]
+	}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, err := w.Write([]byte(doc))
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	fetchedBundle, err := federation.FetchBundle(context.Background(), td, server.URL)
+	assert.NoError(t, err)
+	require.NotNil(t, fetchedBundle)
+	assert.True(t, fetchedBundle.HasJWTAuthority("KID"))
+	assert.Empty(t, fetchedBundle.X509Authorities())
+	assert.Empty(t, fetchedBundle.WITAuthorities())
 }

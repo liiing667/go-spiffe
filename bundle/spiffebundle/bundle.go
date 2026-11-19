@@ -115,6 +115,14 @@ func Parse(trustDomain spiffeid.TrustDomain, bundleBytes []byte) (*Bundle, error
 			if err := bundle.AddWITAuthority(key.KeyID, key.Key); err != nil {
 				return nil, wrapSpiffebundleErr(fmt.Errorf("error adding WIT authority %d of JWKS: %w", i, errors.Unwrap(err)))
 			}
+		case "":
+			// The use parameter is REQUIRED and defines the type of key.
+			// Silently dropping the entry could publish a rotation document
+			// that is missing an authority, so fail explicitly instead.
+			// https://github.com/spiffe/spiffe/blob/main/standards/SPIFFE_Trust_Domain_and_Bundle.md#413-keys
+			return nil, wrapSpiffebundleErr(fmt.Errorf("missing use in key entry %d of JWKS", i))
+		default:
+			return nil, wrapSpiffebundleErr(fmt.Errorf("unexpected use %q in key entry %d of JWKS", key.Use, i))
 		}
 	}
 

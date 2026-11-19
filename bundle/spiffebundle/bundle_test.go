@@ -24,6 +24,7 @@ type testCase struct {
 	sequenceNumber uint64
 	keysCount      int
 	witKeysCount   int
+	x509KeysCount  int
 }
 
 var (
@@ -60,6 +61,14 @@ var (
 		{
 			filePath: "testdata/spiffebundle_multiple_x509.json",
 			err:      "spiffebundle: expected a single certificate in x509-svid entry 0; got 2",
+		},
+		{
+			filePath: "testdata/spiffebundle_missing_use.json",
+			err:      "spiffebundle: missing use in key entry 0 of JWKS",
+		},
+		{
+			filePath: "testdata/spiffebundle_unknown_use.json",
+			err:      `spiffebundle: unexpected use "unknown-svid" in key entry 0 of JWKS`,
 		},
 		{
 			filePath:       "testdata/spiffebundle_valid_with_wit.json",
@@ -124,6 +133,57 @@ func TestFromX509Bundle(t *testing.T) {
 	sb := spiffebundle.FromX509Bundle(xb)
 	require.NotNil(t, sb)
 	assert.Equal(t, xb.X509Authorities(), sb.X509Authorities())
+}
+
+func TestParseSingleTypeBundles(t *testing.T) {
+	t.Run("x509 only", func(t *testing.T) {
+		bundleBytes, err := os.ReadFile("testdata/spiffebundle_valid_x509_only.json")
+		require.NoError(t, err)
+
+		bundle, err := spiffebundle.Parse(td, bundleBytes)
+		require.NoError(t, err)
+		require.Len(t, bundle.X509Authorities(), 1)
+		require.Empty(t, bundle.JWTAuthorities())
+		require.Empty(t, bundle.WITAuthorities())
+	})
+
+	t.Run("jwt only", func(t *testing.T) {
+		bundleBytes, err := os.ReadFile("testdata/spiffebundle_valid_jwt_only.json")
+		require.NoError(t, err)
+
+		bundle, err := spiffebundle.Parse(td, bundleBytes)
+		require.NoError(t, err)
+		require.Empty(t, bundle.X509Authorities())
+		require.Len(t, bundle.JWTAuthorities(), 1)
+		require.Empty(t, bundle.WITAuthorities())
+	})
+
+	t.Run("wit only", func(t *testing.T) {
+		bundleBytes, err := os.ReadFile("testdata/spiffebundle_valid_wit_only.json")
+		require.NoError(t, err)
+
+		bundle, err := spiffebundle.Parse(td, bundleBytes)
+		require.NoError(t, err)
+		require.Empty(t, bundle.X509Authorities())
+		require.Empty(t, bundle.JWTAuthorities())
+		require.Len(t, bundle.WITAuthorities(), 1)
+	})
+}
+
+func TestParseRejectsInvalidUse(t *testing.T) {
+	missingUse := `{"keys":[{"kty":"EC","kid":"key-1","crv":"P-256","x":"ngLYQnlfF6GsojUwqtcEE3WgTNG2RUlsGhK73RNEl5k","y":"tKbiDSUSsQ3F1P7wteeHNXIcU-cx6CgSbroeQrQHTLM"}]}`
+	_, err := spiffebundle.Parse(td, []byte(missingUse))
+	require.EqualError(t, err, "spiffebundle: missing use in key entry 0 of JWKS")
+
+	unknownUse := `{"keys":[{"use":"mystery-svid","kty":"EC","kid":"key-1","crv":"P-256","x":"ngLYQnlfF6GsojUwqtcEE3WgTNG2RUlsGhK73RNEl5k","y":"tKbiDSUSsQ3F1P7wteeHNXIcU-cx6CgSbroeQrQHTLM"}]}`
+	_, err = spiffebundle.Parse(td, []byte(unknownUse))
+	require.EqualError(t, err, `spiffebundle: unexpected use "mystery-svid" in key entry 0 of JWKS`)
+
+	// A valid first entry followed by an invalid one must still fail rather
+	// than silently dropping the unrecognized authority.
+	invalidAfterValid := `{"keys":[{"use":"x509-svid","kty":"EC","crv":"P-384","x":"WjB-nSGSxIYiznb84xu5WGDZj80nL7W1c3zf48Why0ma7Y7mCBKzfQkrgDguI4j0","y":"Z-0_tDH_r8gtOtLLrIpuMwWHoe4vbVBFte1vj6Xt6WeE8lXwcCvLs_mcmvPqVK9j","x5c":["MIIBzDCCAVOgAwIBAgIJAJM4DhRH0vmuMAoGCCqGSM49BAMEMB4xCzAJBgNVBAYTAlVTMQ8wDQYDVQQKDAZTUElGRkUwHhcNMTgwNTEzMTkzMzQ3WhcNMjMwNTEyMTkzMzQ3WjAeMQswCQYDVQQGEwJVUzEPMA0GA1UECgwGU1BJRkZFMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEWjB+nSGSxIYiznb84xu5WGDZj80nL7W1c3zf48Why0ma7Y7mCBKzfQkrgDguI4j0Z+0/tDH/r8gtOtLLrIpuMwWHoe4vbVBFte1vj6Xt6WeE8lXwcCvLs/mcmvPqVK9jo10wWzAdBgNVHQ4EFgQUh6XzV6LwNazA+GTEVOdu07o5yOgwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMCAQYwGQYDVR0RBBIwEIYOc3BpZmZlOi8vbG9jYWwwCgYIKoZIzj0EAwQDZwAwZAIwE4Me13qMC9i6Fkx0h26y09QZIbuRqA9puLg9AeeAAyo5tBzRl1YL0KNEp02VKSYJAjBdeJvqjJ9wW55OGj1JQwDFD7kWeEB6oMlwPbI/5hEY3azJi16I0uN1JSYTSWGSqWc="]},{"use":"mystery-svid","kty":"EC","kid":"key-1","crv":"P-256","x":"ngLYQnlfF6GsojUwqtcEE3WgTNG2RUlsGhK73RNEl5k","y":"tKbiDSUSsQ3F1P7wteeHNXIcU-cx6CgSbroeQrQHTLM"}]}`
+	_, err = spiffebundle.Parse(td, []byte(invalidAfterValid))
+	require.EqualError(t, err, `spiffebundle: unexpected use "mystery-svid" in key entry 1 of JWKS`)
 }
 
 func TestFromJWTBundle(t *testing.T) {
