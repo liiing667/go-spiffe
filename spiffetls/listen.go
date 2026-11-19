@@ -59,8 +59,9 @@ func NewListenerWithMode(ctx context.Context, inner net.Listener, mode ListenMod
 	m := mode.get()
 
 	var sourceCloser io.Closer
+	var source *workloadapi.X509Source
 	if !m.sourceUnneeded {
-		source := m.source
+		source = m.source
 		if source == nil {
 			source, err = workloadapi.NewX509Source(ctx, m.options...)
 			if err != nil {
@@ -83,31 +84,55 @@ func NewListenerWithMode(ctx context.Context, inner net.Listener, mode ListenMod
 		option.apply(opt)
 	}
 
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12} // MinVersion is also set by the Hook methods, but just in case..
+	baseTLSConfig := &tls.Config{MinVersion: tls.VersionTLS12} // MinVersion is also set by the Hook methods, but just in case..
 	if opt.baseTLSConf != nil {
-		tlsConfig = opt.baseTLSConf
+		baseTLSConfig = opt.baseTLSConf
 	}
 
-	switch m.mode {
-	case tlsServerMode:
-		tlsconfig.HookTLSServerConfig(tlsConfig, m.svid, opt.tlsOptions...)
-	case mtlsServerMode:
-		tlsconfig.HookMTLSServerConfig(tlsConfig, m.svid, m.bundle, m.authorizer, opt.tlsOptions...)
-	case mtlsWebServerMode:
-		tlsconfig.HookMTLSWebServerConfig(tlsConfig, m.cert, m.bundle, m.authorizer)
-	default:
-		return nil, wrapSpiffetlsErr(fmt.Errorf("unknown server mode: %v", m.mode))
+	// newTLSConfig builds a TLS configuration scoped to a single connection
+	// (and thus a single handshake). When the X509-SVID and bundles are
+	// backed by a Workload API X.509 source, the handshake is bound to a
+	// single snapshot of the source so the presented X509-SVID and the
+	// bundles used to verify the client belong to the same rotation
+	// generation.
+	newTLSConfig := func() (*tls.Config, error) {
+		svid := m.svid
+		bundle := m.bundle
+		if source != nil && m.mode == mtlsServerMode {
+			svid, bundle = tlsconfig.BindSnapshots(sourceSnapshotter(source))
+		}
+
+		tlsConfig := baseTLSConfig.Clone()
+		switch m.mode {
+		case tlsServerMode:
+			tlsconfig.HookTLSServerConfig(tlsConfig, svid, opt.tlsOptions...)
+		case mtlsServerMode:
+			tlsconfig.HookMTLSServerConfig(tlsConfig, svid, bundle, m.authorizer, opt.tlsOptions...)
+		case mtlsWebServerMode:
+			tlsconfig.HookMTLSWebServerConfig(tlsConfig, m.cert, bundle, m.authorizer)
+		default:
+			return nil, wrapSpiffetlsErr(fmt.Errorf("unknown server mode: %v", m.mode))
+		}
+		return tlsConfig, nil
+	}
+
+	// Validate the mode up front so misconfiguration fails at Listen time
+	// rather than on the first accepted connection.
+	if _, err := newTLSConfig(); err != nil {
+		return nil, err
 	}
 
 	return &listener{
-		inner:        tls.NewListener(inner, tlsConfig),
+		inner:        inner,
 		sourceCloser: sourceCloser,
+		newTLSConfig: newTLSConfig,
 	}, nil
 }
 
 type listener struct {
 	inner        net.Listener
 	sourceCloser io.Closer
+	newTLSConfig func() (*tls.Config, error)
 }
 
 func (l *listener) Accept() (net.Conn, error) {
@@ -115,13 +140,12 @@ func (l *listener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	tlsConn, ok := conn.(*tls.Conn)
-	if !ok {
-		// This is purely defensive. The TLS listeners return tls.Conn's by contract.
+	tlsConfig, err := l.newTLSConfig()
+	if err != nil {
 		conn.Close()
-		return nil, wrapSpiffetlsErr(fmt.Errorf("unexpected conn type %T returned by TLS listener", conn))
+		return nil, err
 	}
-	return &serverConn{Conn: tlsConn}, nil
+	return &serverConn{Conn: tls.Server(conn, tlsConfig)}, nil
 }
 
 func (l *listener) Addr() net.Addr {

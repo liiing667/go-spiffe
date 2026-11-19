@@ -92,6 +92,31 @@ func (s *X509Source) GetX509BundleForTrustDomain(trustDomain spiffeid.TrustDomai
 	return bundles.GetX509BundleForTrustDomain(trustDomain)
 }
 
+// GetX509Snapshot returns a consistent snapshot of the current X509-SVID and
+// X.509 bundles. The SVID and bundles are captured atomically and are
+// guaranteed to belong to the same Workload API update, unlike separate
+// calls to GetX509SVID and GetX509BundleForTrustDomain, which can observe
+// different updates if the source is updated in between. The returned
+// snapshot remains usable after the source is updated or closed.
+func (s *X509Source) GetX509Snapshot() (*X509Snapshot, error) {
+	if err := s.checkClosed(); err != nil {
+		return nil, err
+	}
+
+	s.mtx.RLock()
+	svid := s.svid
+	bundles := s.bundles
+	s.mtx.RUnlock()
+
+	if svid == nil {
+		// This is a defensive check and should be unreachable since the source
+		// waits for the initial Workload API update before returning from
+		// New().
+		return nil, wrapX509sourceErr(errors.New("missing X509-SVID"))
+	}
+	return &X509Snapshot{svid: svid, bundles: bundles}, nil
+}
+
 // WaitUntilUpdated waits until the source is updated or the context is done,
 // in which case ctx.Err() is returned.
 func (s *X509Source) WaitUntilUpdated(ctx context.Context) error {

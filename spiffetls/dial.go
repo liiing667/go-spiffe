@@ -27,8 +27,9 @@ func DialWithMode(ctx context.Context, network, addr string, mode DialMode, opti
 	m := mode.get()
 
 	var sourceCloser io.Closer
+	var source *workloadapi.X509Source
 	if !m.sourceUnneeded {
-		source := m.source
+		source = m.source
 		if source == nil {
 			source, err = workloadapi.NewX509Source(ctx, m.options...)
 			if err != nil {
@@ -51,6 +52,15 @@ func DialWithMode(ctx context.Context, network, addr string, mode DialMode, opti
 		option.apply(opt)
 	}
 
+	svid := m.svid
+	bundle := m.bundle
+	if source != nil && m.mode == mtlsClientMode {
+		// Bind the handshake to a single snapshot of the source so the
+		// presented X509-SVID and the bundles used to verify the server
+		// belong to the same rotation generation.
+		svid, bundle = tlsconfig.BindSnapshots(sourceSnapshotter(source))
+	}
+
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12} // MinVersion is also set by the Hook methods, but just in case...
 	if opt.baseTLSConf != nil {
 		tlsConfig = opt.baseTLSConf
@@ -58,11 +68,11 @@ func DialWithMode(ctx context.Context, network, addr string, mode DialMode, opti
 
 	switch m.mode {
 	case tlsClientMode:
-		tlsconfig.HookTLSClientConfig(tlsConfig, m.bundle, m.authorizer)
+		tlsconfig.HookTLSClientConfig(tlsConfig, bundle, m.authorizer)
 	case mtlsClientMode:
-		tlsconfig.HookMTLSClientConfig(tlsConfig, m.svid, m.bundle, m.authorizer, opt.tlsOptions...)
+		tlsconfig.HookMTLSClientConfig(tlsConfig, svid, bundle, m.authorizer, opt.tlsOptions...)
 	case mtlsWebClientMode:
-		tlsconfig.HookMTLSWebClientConfig(tlsConfig, m.svid, m.roots, opt.tlsOptions...)
+		tlsconfig.HookMTLSWebClientConfig(tlsConfig, svid, m.roots, opt.tlsOptions...)
 	default:
 		return nil, wrapSpiffetlsErr(fmt.Errorf("unknown client mode: %v", m.mode))
 	}

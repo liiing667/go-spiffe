@@ -63,6 +63,175 @@ func TestX509SourceFailsCallsIfClosed(t *testing.T) {
 	require.EqualError(t, err, "x509source: source is closed")
 }
 
+func TestX509SourceGetX509Snapshot(t *testing.T) {
+	// Time out the test after a minute if something goes wrong.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	api := fakeworkloadapi.New(t)
+	defer api.Stop()
+
+	td := spiffeid.RequireTrustDomainFromString("domain.test")
+	ca1 := test.NewCA(t, td)
+	ca2 := test.NewCA(t, td)
+
+	svid1 := ca1.CreateX509SVID(spiffeid.RequireFromPath(td, "/workload"))
+	svid2 := ca2.CreateX509SVID(spiffeid.RequireFromPath(td, "/workload"))
+
+	// Set the initial X509SVIDResponse (generation 1).
+	api.SetX509SVIDResponse(&fakeworkloadapi.X509SVIDResponse{
+		SVIDs:  []*x509svid.SVID{svid1},
+		Bundle: ca1.X509Bundle(),
+	})
+
+	// Create the source. It will wait for the initial response.
+	source, err := workloadapi.NewX509Source(ctx, withAddr(api))
+	require.NoError(t, err)
+
+	// Take a snapshot of generation 1.
+	snap1, err := source.GetX509Snapshot()
+	require.NoError(t, err)
+
+	gotSVID, err := snap1.GetX509SVID()
+	require.NoError(t, err)
+	require.Equal(t, svid1.Certificates, gotSVID.Certificates)
+
+	gotBundle, err := snap1.GetX509BundleForTrustDomain(td)
+	require.NoError(t, err)
+	require.Equal(t, ca1.X509Authorities(), gotBundle.X509Authorities())
+
+	// The snapshot bundles verify the snapshot SVID.
+	_, _, err = x509svid.Verify(gotSVID.Certificates, snap1)
+	require.NoError(t, err)
+
+	// A trust domain outside the snapshot has no bundle.
+	otherTD := spiffeid.RequireTrustDomainFromString("other.test")
+	_, err = snap1.GetX509BundleForTrustDomain(otherTD)
+	require.EqualError(t, err, `x509bundle: no X.509 bundle for trust domain "other.test"`)
+
+	// Rotate the source to generation 2 (new SVID and new bundle).
+	api.SetX509SVIDResponse(&fakeworkloadapi.X509SVIDResponse{
+		SVIDs:  []*x509svid.SVID{svid2},
+		Bundle: ca2.X509Bundle(),
+	})
+	require.NoError(t, source.WaitUntilUpdated(ctx))
+
+	snap2, err := source.GetX509Snapshot()
+	require.NoError(t, err)
+
+	gotSVID, err = snap2.GetX509SVID()
+	require.NoError(t, err)
+	require.Equal(t, svid2.Certificates, gotSVID.Certificates)
+
+	gotBundle, err = snap2.GetX509BundleForTrustDomain(td)
+	require.NoError(t, err)
+	require.Equal(t, ca2.X509Authorities(), gotBundle.X509Authorities())
+
+	// The first snapshot is immutable: it still serves generation 1.
+	gotSVID, err = snap1.GetX509SVID()
+	require.NoError(t, err)
+	require.Equal(t, svid1.Certificates, gotSVID.Certificates)
+
+	gotBundle, err = snap1.GetX509BundleForTrustDomain(td)
+	require.NoError(t, err)
+	require.Equal(t, ca1.X509Authorities(), gotBundle.X509Authorities())
+
+	// Snapshots remain usable after the source is closed.
+	require.NoError(t, source.Close())
+
+	_, err = source.GetX509Snapshot()
+	require.EqualError(t, err, "x509source: source is closed")
+
+	gotSVID, err = snap1.GetX509SVID()
+	require.NoError(t, err)
+	require.Equal(t, svid1.Certificates, gotSVID.Certificates)
+
+	_, err = snap1.GetX509BundleForTrustDomain(td)
+	require.NoError(t, err)
+}
+
+func TestX509SourceGetX509SnapshotConsistentUnderUpdates(t *testing.T) {
+	// Time out the test after three minutes if something goes wrong.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	api := fakeworkloadapi.New(t)
+	defer api.Stop()
+
+	td := spiffeid.RequireTrustDomainFromString("domain.test")
+
+	// Two generations rooted at different CAs. A snapshot mixing the SVID
+	// of one generation with the bundle of the other fails verification,
+	// so any inconsistency is detected deterministically.
+	ca1 := test.NewCA(t, td)
+	svid1 := ca1.CreateX509SVID(spiffeid.RequireFromPath(td, "/workload"))
+	ca2 := test.NewCA(t, td)
+	svid2 := ca2.CreateX509SVID(spiffeid.RequireFromPath(td, "/workload"))
+
+	api.SetX509SVIDResponse(&fakeworkloadapi.X509SVIDResponse{
+		SVIDs:  []*x509svid.SVID{svid1},
+		Bundle: ca1.X509Bundle(),
+	})
+
+	source, err := workloadapi.NewX509Source(ctx, withAddr(api))
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, source.Close())
+	}()
+
+	// Fetch snapshots from several goroutines while repeatedly rotating
+	// the source between the two generations. Every snapshot must be
+	// internally consistent: its SVID must verify against its bundles.
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	defer func() {
+		close(stop)
+		wg.Wait()
+	}()
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				snap, err := source.GetX509Snapshot()
+				if !assert.NoError(t, err) {
+					return
+				}
+				svid, err := snap.GetX509SVID()
+				if !assert.NoError(t, err) {
+					return
+				}
+				_, _, err = x509svid.Verify(svid.Certificates, snap)
+				assert.NoError(t, err)
+			}
+		}()
+	}
+
+	for i := range 200 {
+		if i%2 == 0 {
+			api.SetX509SVIDResponse(&fakeworkloadapi.X509SVIDResponse{
+				SVIDs:  []*x509svid.SVID{svid2},
+				Bundle: ca2.X509Bundle(),
+			})
+		} else {
+			api.SetX509SVIDResponse(&fakeworkloadapi.X509SVIDResponse{
+				SVIDs:  []*x509svid.SVID{svid1},
+				Bundle: ca1.X509Bundle(),
+			})
+		}
+		// Wait for the watcher to consume the update before pushing the
+		// next one, so the fake Workload API's response channel (used to
+		// fan the update out to the watch stream) isn't hammered faster
+		// than its single consumer can drain it.
+		require.NoError(t, source.WaitUntilUpdated(ctx))
+	}
+}
+
 func TestX509SourceGetX509BundleForTrustDomainRace(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
