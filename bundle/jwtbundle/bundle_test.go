@@ -36,6 +36,13 @@ var (
 		"missing kid": {
 			filePath: "testdata/jwks_missing_kid.json",
 		},
+		"duplicate kid same key": {
+			filePath:  "testdata/jwks_duplicate_kid_same.json",
+			keysCount: 1,
+		},
+		"duplicate kid conflicting keys": {
+			filePath: "testdata/jwks_duplicate_kid_conflict.json",
+		},
 	}
 )
 
@@ -75,6 +82,13 @@ func TestLoad(t *testing.T) {
 			tf:  testFiles["missing kid"],
 			err: "jwtbundle: error adding authority 1 of JWKS: keyID cannot be empty",
 		},
+		{
+			tf: testFiles["duplicate kid same key"],
+		},
+		{
+			tf:  testFiles["duplicate kid conflicting keys"],
+			err: `jwtbundle: error adding authority 1 of JWKS: multiple different keys with key ID "C6vs25welZOx6WksNYfbMfiw9l96pMnD"`,
+		},
 	}
 
 	for _, testCase := range testCases {
@@ -109,6 +123,13 @@ func TestRead(t *testing.T) {
 		{
 			tf:  testFiles["missing kid"],
 			err: "jwtbundle: error adding authority 1 of JWKS: keyID cannot be empty",
+		},
+		{
+			tf: testFiles["duplicate kid same key"],
+		},
+		{
+			tf:  testFiles["duplicate kid conflicting keys"],
+			err: `jwtbundle: error adding authority 1 of JWKS: multiple different keys with key ID "C6vs25welZOx6WksNYfbMfiw9l96pMnD"`,
 		},
 	}
 
@@ -148,6 +169,13 @@ func TestParse(t *testing.T) {
 		{
 			tf:  testFiles["missing kid"],
 			err: "jwtbundle: error adding authority 1 of JWKS: keyID cannot be empty",
+		},
+		{
+			tf: testFiles["duplicate kid same key"],
+		},
+		{
+			tf:  testFiles["duplicate kid conflicting keys"],
+			err: `jwtbundle: error adding authority 1 of JWKS: multiple different keys with key ID "C6vs25welZOx6WksNYfbMfiw9l96pMnD"`,
 		},
 	}
 

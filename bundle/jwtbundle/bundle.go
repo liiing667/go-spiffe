@@ -66,10 +66,15 @@ func Parse(trustDomain spiffeid.TrustDomain, bundleBytes []byte) (*Bundle, error
 	}
 
 	bundle := New(trustDomain)
+	seen := make(map[string]crypto.PublicKey)
 	for i, key := range jwks.Keys {
+		if existing, ok := seen[key.KeyID]; ok && !jwtutil.PublicKeysEqual(existing, key.Key) {
+			return nil, wrapJwtbundleErr(fmt.Errorf("error adding authority %d of JWKS: multiple different keys with key ID %q", i, key.KeyID))
+		}
 		if err := bundle.AddJWTAuthority(key.KeyID, key.Key); err != nil {
 			return nil, wrapJwtbundleErr(fmt.Errorf("error adding authority %d of JWKS: %v", i, errors.Unwrap(err)))
 		}
+		seen[key.KeyID] = key.Key
 	}
 
 	return bundle, nil

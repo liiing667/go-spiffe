@@ -54,6 +54,14 @@ var (
 			err:      "spiffebundle: error adding authority 1 of JWKS: keyID cannot be empty",
 		},
 		{
+			filePath:  "testdata/spiffebundle_duplicate_kid_same.json",
+			keysCount: 1,
+		},
+		{
+			filePath: "testdata/spiffebundle_duplicate_kid_conflict.json",
+			err:      `spiffebundle: error adding authority 1 of JWKS: multiple different keys with key ID "C6vs25welZOx6WksNYfbMfiw9l96pMnD"`,
+		},
+		{
 			filePath: "testdata/spiffebundle_no_keys.json",
 			err:      "spiffebundle: no authorities found",
 		},

@@ -99,6 +99,7 @@ func Parse(trustDomain spiffeid.TrustDomain, bundleBytes []byte) (*Bundle, error
 		// https://github.com/spiffe/spiffe/blob/main/standards/SPIFFE_Trust_Domain_and_Bundle.md#413-keys
 		return nil, wrapSpiffebundleErr(errors.New("no authorities found"))
 	}
+	jwtKeys := make(map[string]crypto.PublicKey)
 	for i, key := range jwks.Keys {
 		switch key.Use {
 		// Two SVID types are supported: x509-svid and jwt-svid.
@@ -108,9 +109,13 @@ func Parse(trustDomain spiffeid.TrustDomain, bundleBytes []byte) (*Bundle, error
 			}
 			bundle.AddX509Authority(key.Certificates[0])
 		case jwtSVIDUse:
+			if existing, ok := jwtKeys[key.KeyID]; ok && !jwtutil.PublicKeysEqual(existing, key.Key) {
+				return nil, wrapSpiffebundleErr(fmt.Errorf("error adding authority %d of JWKS: multiple different keys with key ID %q", i, key.KeyID))
+			}
 			if err := bundle.AddJWTAuthority(key.KeyID, key.Key); err != nil {
 				return nil, wrapSpiffebundleErr(fmt.Errorf("error adding authority %d of JWKS: %w", i, errors.Unwrap(err)))
 			}
+			jwtKeys[key.KeyID] = key.Key
 		case witSVIDUse:
 			if err := bundle.AddWITAuthority(key.KeyID, key.Key); err != nil {
 				return nil, wrapSpiffebundleErr(fmt.Errorf("error adding WIT authority %d of JWKS: %w", i, errors.Unwrap(err)))

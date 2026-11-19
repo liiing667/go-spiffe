@@ -3,6 +3,7 @@ package jwtutil
 import (
 	"crypto"
 	"maps"
+	"reflect"
 
 	"github.com/spiffe/go-spiffe/v2/internal/cryptoutil"
 )
@@ -12,6 +13,16 @@ func CopyJWTAuthorities(jwtAuthorities map[string]crypto.PublicKey) map[string]c
 	copiedJWTAuthorities := make(map[string]crypto.PublicKey)
 	maps.Copy(copiedJWTAuthorities, jwtAuthorities)
 	return copiedJWTAuthorities
+}
+
+// PublicKeysEqual reports whether two JWT authority keys hold identical key
+// material.
+func PublicKeysEqual(a, b crypto.PublicKey) bool {
+	equal, err := cryptoutil.PublicKeyEqual(a, b)
+	if err != nil {
+		return reflect.DeepEqual(a, b)
+	}
+	return equal
 }
 
 func JWTAuthoritiesEqual(a, b map[string]crypto.PublicKey) bool {
